@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "motadata-helpdesk"
+version = "0.1.0"
+description = "Python SDK and client library for Motadata ServiceOps HelpDesk"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+keywords = [
+    "motadata",
+    "serviceops",
+    "helpdesk",
+    "itsm",
+    "tickets",
+    "rest-api",
+    "sdk",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "requests>=2.28.0",
+    "pydantic>=2.0.0",
+    "jinja2>=3.0.0",
+    "urllib3>=1.26.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-mock>=3.10.0",
+    "ruff>=0.1.0",
+    "build>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/motadata/motadata-helpdesk"
+Documentation = "https://docs.motadata.com/serviceops-docs/"
+Repository = "https://github.com/motadata/motadata-helpdesk"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/motadata_helpdesk"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

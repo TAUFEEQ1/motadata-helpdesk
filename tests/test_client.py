@@ -242,6 +242,173 @@ def test_search_tickets_with_dict_and_builder(mocker):
     assert res2.total_count == 1
 
 
+def test_create_ticket(mocker):
+    session_mock = mocker.MagicMock(spec=requests.Session)
+    create_resp = {
+        "id": 81,
+        "name": "INC-81",
+        "createdTime": 1773223973227,
+        "updatedTime": 1773223973284,
+        "statusName": "Open",
+        "createdByName": "jerry",
+        "subject": "Emails are not being sent",
+        "requesterEmail": "jerry@example.com",
+        "categoryName": "Hardware",
+        "impactName": "On Users",
+        "priorityName": "High",
+        "urgencyName": "Urgent",
+        "departmentName": "IT",
+        "locationName": "USA",
+        "supportLevel": "tier4",
+        "spam": False,
+        "source": "External",
+        "customField": {"FollowUpDate": 1763013175000},
+    }
+    session_mock.request.return_value = create_mock_response(200, json_data=create_resp)
+
+    client = HelpDeskClient(
+        base_url="https://test.example.com", api_key="my_key", session=session_mock
+    )
+
+    ticket = client.create_ticket(
+        subject="Emails are not being sent",
+        requester_email="jerry@example.com",
+        category_name="Hardware",
+        priority_name="High",
+        urgency_name="Urgent",
+        impact_name="On Users",
+        custom_field={"FollowUpDate": "1763013175000"},
+        validate_response=True,
+    )
+
+    assert isinstance(ticket, HelpTicket)
+    assert ticket.id == 81
+    assert ticket.subject == "Emails are not being sent"
+
+    call_args, call_kwargs = session_mock.request.call_args
+    assert call_args[0] == "POST"
+    assert call_args[1] == "https://test.example.com/api/v1/request"
+    assert call_kwargs["json"]["subject"] == "Emails are not being sent"
+    assert call_kwargs["json"]["requesterEmail"] == "jerry@example.com"
+    assert call_kwargs["json"]["categoryName"] == "Hardware"
+
+
+def test_create_ticket_validation():
+    client = HelpDeskClient(base_url="https://test.example.com", api_key="key")
+
+    with pytest.raises(HelpDeskValidationError, match="subject is required"):
+        client.create_ticket(subject="", requester_email="user@example.com")
+
+    with pytest.raises(HelpDeskValidationError, match="requester_email is required"):
+        client.create_ticket(subject="Subject", requester_email="")
+
+
+def test_delete_ticket(mocker):
+    session_mock = mocker.MagicMock(spec=requests.Session)
+    delete_resp = {
+        "userMessage": "Request has been archived successfully.",
+        "warningMessage": None,
+        "id": 22,
+    }
+    session_mock.request.return_value = create_mock_response(200, json_data=delete_resp)
+
+    client = HelpDeskClient(
+        base_url="https://test.example.com", api_key="my_key", session=session_mock
+    )
+
+    res = client.delete_ticket(22)
+    assert res["id"] == 22
+    assert "archived" in res["userMessage"]
+
+    call_args, _ = session_mock.request.call_args
+    assert call_args[0] == "DELETE"
+    assert call_args[1] == "https://test.example.com/api/v1/request/22"
+
+
+def test_get_tickets_by_requester(mocker):
+    session_mock = mocker.MagicMock(spec=requests.Session)
+    resp_data = {
+        "objectList": [
+            {
+                "id": 1,
+                "name": "INC-1",
+                "createdTime": 1754564344461,
+                "updatedTime": 1754569595051,
+                "statusName": "Resolved",
+                "subject": "Internet is not Working",
+                "requesterEmail": "jerry@motadata.com",
+            }
+        ],
+        "totalCount": 1,
+    }
+    session_mock.request.return_value = create_mock_response(200, json_data=resp_data)
+
+    client = HelpDeskClient(
+        base_url="https://test.example.com", api_key="my_key", session=session_mock
+    )
+
+    res = client.get_tickets_by_requester("jerry@motadata.com")
+    assert isinstance(res, SearchResponse)
+    assert res.total_count == 1
+    assert res.object_list[0].id == 1
+
+    call_args, _ = session_mock.request.call_args
+    assert "requester=jerry@motadata.com" in call_args[1]
+
+
+def test_get_request_count(mocker):
+    session_mock = mocker.MagicMock(spec=requests.Session)
+    resp_data = {"Finance": 1, "Total": 80, "IT": 3}
+    session_mock.request.return_value = create_mock_response(200, json_data=resp_data)
+
+    client = HelpDeskClient(
+        base_url="https://test.example.com", api_key="my_key", session=session_mock
+    )
+
+    counts = client.get_request_count(column="department")
+    assert counts["Total"] == 80
+    assert counts["IT"] == 3
+
+    call_args, call_kwargs = session_mock.request.call_args
+    assert call_args[0] == "GET"
+    assert call_kwargs["json"]["column"] == "department"
+
+
+def test_upload_attachment(mocker, tmp_path):
+    session_mock = mocker.MagicMock(spec=requests.Session)
+    resp_data = {
+        "id": 49,
+        "refFileName": "ec36611d-fe37-41d4",
+        "realName": "test.txt",
+    }
+    session_mock.request.return_value = create_mock_response(200, json_data=resp_data)
+
+    client = HelpDeskClient(
+        base_url="https://test.example.com", api_key="my_key", session=session_mock
+    )
+
+    # 1. Upload via file_path
+    sample_file = tmp_path / "test.txt"
+    sample_file.write_text("file content")
+
+    res = client.upload_attachment(file_path=sample_file)
+    assert res["refFileName"] == "ec36611d-fe37-41d4"
+    call_args, call_kwargs = session_mock.request.call_args
+    assert call_args[0] == "POST"
+    assert "files" in call_kwargs
+
+    # 2. Upload via file_content
+    res2 = client.upload_attachment(file_content=b"bytes content", file_name="bytes.txt")
+    assert res2["refFileName"] == "ec36611d-fe37-41d4"
+
+    # 3. Validation errors
+    with pytest.raises(HelpDeskValidationError, match="Either file_path or file_content"):
+        client.upload_attachment()
+
+    with pytest.raises(HelpDeskValidationError, match="file_name is required"):
+        client.upload_attachment(file_content=b"abc")
+
+
 def test_update_ticket(mocker):
     session_mock = mocker.MagicMock(spec=requests.Session)
     updated_data = {

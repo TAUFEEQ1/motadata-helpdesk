@@ -1,12 +1,11 @@
 import logging
 import os
-import time
 from typing import Any, Dict, List, Optional, Union
 
 import requests
 import urllib3
-from requests.auth import HTTPBasicAuth
 
+from .auth import APIKeyAuth, BaseAuth, BearerTokenAuth, OAuth2Auth
 from .enums import ConversationState, ConversationType
 from .exceptions import (
     HelpDeskAPIError,
@@ -37,10 +36,8 @@ class HelpDeskClient:
     technician details, query building, and response template rendering.
 
     Authentication supports:
-      - OAuth2 password grant (client_id, client_secret, username, password)
-      - API Key (api_key)
-      - Pre-generated Bearer token (access_token)
-      - Environment variables fallback (MOTADATA_*, API_*, TICKET_*)
+      - Dedicated auth objects: APIKeyAuth, OAuth2Auth, BearerTokenAuth
+      - Automatic auth resolution from client arguments or environment variables
     """
 
     DEFAULT_TOKEN_AGE = 7200  # 2 hours
@@ -48,6 +45,7 @@ class HelpDeskClient:
     def __init__(
         self,
         base_url: Optional[str] = None,
+        auth: Optional[BaseAuth] = None,
         username: Optional[str] = None,
         password: Optional[str] = None,
         client_id: Optional[str] = None,
@@ -68,14 +66,6 @@ class HelpDeskClient:
         )
         self.base_url = raw_url.rstrip("/")
 
-        self.username = username or os.getenv("MOTADATA_USERNAME") or os.getenv("API_USERNAME")
-        self.password = password or os.getenv("MOTADATA_PASSWORD") or os.getenv("API_PASSWORD")
-        self.client_id = client_id or os.getenv("MOTADATA_CLIENT_ID") or os.getenv("API_CLIENT_ID")
-        self.client_secret = (
-            client_secret or os.getenv("MOTADATA_CLIENT_SECRET") or os.getenv("API_CLIENT_SECRET")
-        )
-        self.api_key = api_key or os.getenv("MOTADATA_API_KEY") or os.getenv("API_KEY")
-
         if verify_ssl is not None:
             self.verify_ssl = verify_ssl
         else:
@@ -90,70 +80,96 @@ class HelpDeskClient:
         self.token_age = token_age
         self.session = session or requests.Session()
 
-        self._access_token = access_token or os.getenv("MOTADATA_ACCESS_TOKEN")
-        self._token_expires_at = time.time() + self.token_age if self._access_token else None
+        # Resolve authentication handler
+        if auth is not None:
+            self.auth: Optional[BaseAuth] = auth
+        elif api_key or os.getenv("MOTADATA_API_KEY") or os.getenv("API_KEY"):
+            self.auth = APIKeyAuth(api_key=api_key)
+        elif access_token or os.getenv("MOTADATA_ACCESS_TOKEN"):
+            self.auth = BearerTokenAuth(token=access_token)
+        elif (
+            client_id
+            or client_secret
+            or username
+            or password
+            or os.getenv("MOTADATA_CLIENT_ID")
+            or os.getenv("API_CLIENT_ID")
+        ):
+            self.auth = OAuth2Auth(
+                client_id=client_id,
+                client_secret=client_secret,
+                username=username,
+                password=password,
+                base_url=self.base_url,
+                token_age=token_age,
+                verify_ssl=self.verify_ssl,
+                timeout=self.timeout,
+            )
+        else:
+            self.auth = None
 
     @property
     def api_url(self) -> str:
         """Backwards compatibility alias for base_url."""
         return self.base_url
 
+    @property
+    def username(self) -> Optional[str]:
+        if isinstance(self.auth, OAuth2Auth):
+            return self.auth.username
+        return None
+
+    @property
+    def api_key(self) -> Optional[str]:
+        if isinstance(self.auth, APIKeyAuth):
+            return self.auth.api_key
+        return None
+
+    @property
+    def _access_token(self) -> Optional[str]:
+        if isinstance(self.auth, OAuth2Auth):
+            return self.auth._access_token
+        if isinstance(self.auth, BearerTokenAuth):
+            return self.auth.token
+        return None
+
+    @_access_token.setter
+    def _access_token(self, value: Optional[str]) -> None:
+        if isinstance(self.auth, OAuth2Auth):
+            self.auth._access_token = value
+        elif isinstance(self.auth, BearerTokenAuth):
+            self.auth.token = value
+
+    @property
+    def _token_expires_at(self) -> Optional[float]:
+        if isinstance(self.auth, OAuth2Auth):
+            return self.auth._token_expires_at
+        return None
+
+    @_token_expires_at.setter
+    def _token_expires_at(self, value: Optional[float]) -> None:
+        if isinstance(self.auth, OAuth2Auth):
+            self.auth._token_expires_at = value
+
     def _generate_access_token(self) -> str:
-        if not (self.username and self.password and self.client_id and self.client_secret):
-            raise HelpDeskAuthError(
-                "Missing OAuth2 credentials (username, password, client_id, client_secret) "
-                "required to generate an access token."
-            )
-
-        auth_url = f"{self.base_url}/api/oauth/token"
-        payload = {
-            "username": self.username,
-            "password": self.password,
-            "grant_type": "password",
-        }
-        headers = {"Cookie": "Path=/"}
-        auth = HTTPBasicAuth(self.client_id, self.client_secret)
-
-        try:
-            response = self.session.post(
-                auth_url,
-                data=payload,
-                auth=auth,
-                headers=headers,
-                verify=self.verify_ssl,
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            token_data = response.json()
-            token = token_data.get("access_token")
-            if not token:
-                raise HelpDeskAuthError(
-                    f"Authentication response missing 'access_token': {token_data}",
-                    response=response,
-                )
-            return token
-        except requests.HTTPError as exc:
-            raise HelpDeskAuthError(
-                f"Failed to acquire OAuth2 access token: {exc}",
-                response=exc.response,
-                status_code=exc.response.status_code if exc.response is not None else None,
-            ) from exc
-        except requests.RequestException as exc:
-            raise HelpDeskAuthError(f"OAuth2 token request failed: {exc}") from exc
+        if isinstance(self.auth, OAuth2Auth):
+            return self.auth._generate_token(self.base_url, session=self.session)
+        raise HelpDeskAuthError(
+            "Missing OAuth2 credentials (username, password, client_id, client_secret) "
+            "required to generate an access token."
+        )
 
     def _get_access_token(self) -> str:
-        if not self._access_token or (
-            self._token_expires_at and time.time() > self._token_expires_at
-        ):
-            self._access_token = self._generate_access_token()
-            self._token_expires_at = time.time() + self.token_age
-        return self._access_token
+        if isinstance(self.auth, OAuth2Auth):
+            return self.auth.get_token(self.base_url, session=self.session)
+        if isinstance(self.auth, BearerTokenAuth):
+            return self.auth.token or ""
+        raise HelpDeskAuthError("Current authentication provider is not token-based.")
 
     def _build_auth_headers(self) -> Dict[str, str]:
-        if self.api_key:
-            return {"Authorization": f"Apikey {self.api_key}"}
-        token = self._get_access_token()
-        return {"Authorization": f"Bearer {token}"}
+        if self.auth is None:
+            raise HelpDeskAuthError("No authentication provider configured.")
+        return self.auth.get_headers(base_url=self.base_url, session=self.session)
 
     def _dispatch(self, method: str, endpoint: str, **kwargs) -> Any:
         if not self.base_url:
@@ -240,6 +256,119 @@ class HelpDeskClient:
         raw_dict = self._dispatch("POST", url, json=payload)
         return SearchResponse(**raw_dict)
 
+    def create_ticket(
+        self,
+        subject: str,
+        requester_email: str,
+        category_name: Optional[str] = None,
+        description: Optional[str] = None,
+        status_name: Optional[str] = None,
+        priority_name: Optional[str] = None,
+        urgency_name: Optional[str] = None,
+        impact_name: Optional[str] = None,
+        department_name: Optional[str] = None,
+        location_name: Optional[str] = None,
+        technician_group_name: Optional[str] = None,
+        assignee_email: Optional[str] = None,
+        support_level: Optional[str] = None,
+        source: Optional[str] = "External",
+        spam: bool = False,
+        tags: Optional[List[str]] = None,
+        cc_email_set: Optional[List[str]] = None,
+        custom_field: Optional[Dict[str, Any]] = None,
+        file_attachments: Optional[List[dict]] = None,
+        link_asset_ids: Optional[List[dict]] = None,
+        link_ci_ids: Optional[List[dict]] = None,
+        extra_fields: Optional[Dict[str, Any]] = None,
+        validate_response: bool = True,
+    ) -> Union[HelpTicket, dict]:
+        """Create a new request/ticket in ServiceOps.
+
+        Args:
+            subject: Subject of the ticket (required).
+            requester_email: Email address of the requester (required).
+            category_name: Category name of the request (e.g. 'Request', 'Hardware').
+            description: Detailed explanation about the ticket.
+            status_name: Status name (e.g. 'Open', 'In Progress', 'Pending', 'Resolved', 'Closed').
+            priority_name: Importance (e.g. 'Low', 'Medium', 'High', 'Urgent').
+            urgency_name: Urgency (e.g. 'Low', 'Medium', 'High', 'Urgent').
+            impact_name: Effect of the request (e.g. 'Low', 'On User', 'On department', 'On Business').
+            department_name: Department name.
+            location_name: Location name where the request occurred.
+            technician_group_name: Assigned technician group.
+            assignee_email: Assigned technician email.
+            support_level: Support tier (e.g. 'Tier1', 'Tier2', 'Tier3', 'tier4').
+            source: Origin of ticket (default 'External').
+            spam: Whether marked as spam (default False).
+            tags: Additional identifier tags.
+            cc_email_set: CC recipient emails for notifications.
+            custom_field: Custom fields dictionary.
+            file_attachments: List of attachments ({'refFileName': ..., 'realName': ...}).
+            link_asset_ids: List of linked assets ({'assetModel': ..., 'assetId': ...}).
+            link_ci_ids: List of linked CIs ({'ciId': ..., 'ciModel': ...}).
+            extra_fields: Any additional arbitrary API payload fields.
+            validate_response: Return validated HelpTicket model if True, raw dict if False.
+
+        Returns:
+            Union[HelpTicket, dict]: The created ticket.
+        """
+        if not subject:
+            raise HelpDeskValidationError("subject is required to create a ticket.")
+        if not requester_email:
+            raise HelpDeskValidationError("requester_email is required to create a ticket.")
+
+        payload: Dict[str, Any] = {
+            "subject": subject,
+            "requesterEmail": requester_email,
+            "source": source or "External",
+            "spam": bool(spam),
+        }
+
+        if category_name is not None:
+            payload["categoryName"] = category_name
+        if description is not None:
+            payload["description"] = description
+        if status_name is not None:
+            payload["statusName"] = status_name
+        if priority_name is not None:
+            payload["priorityName"] = priority_name
+        if urgency_name is not None:
+            payload["urgencyName"] = urgency_name
+        if impact_name is not None:
+            payload["impactName"] = impact_name
+        if department_name is not None:
+            payload["departmentName"] = department_name
+        if location_name is not None:
+            payload["locationName"] = location_name
+        if technician_group_name is not None:
+            payload["technicianGroupName"] = technician_group_name
+        if assignee_email is not None:
+            payload["assigneeEmail"] = assignee_email
+        if support_level is not None:
+            payload["supportLevel"] = support_level
+        if tags is not None:
+            payload["tags"] = tags
+        if cc_email_set is not None:
+            payload["ccEmailSet"] = cc_email_set
+        if custom_field is not None:
+            payload["customField"] = custom_field
+        if file_attachments is not None:
+            payload["fileAttachments"] = file_attachments
+        if link_asset_ids is not None:
+            payload["linkAssetIds"] = link_asset_ids
+        if link_ci_ids is not None:
+            payload["linkCiIds"] = link_ci_ids
+        if extra_fields:
+            payload.update(extra_fields)
+
+        url = "/api/v1/request"
+        raw_dict = self._dispatch("POST", url, json=payload)
+        if validate_response:
+            return HelpTicket(**raw_dict)
+        return raw_dict
+
+    create_request = create_ticket
+
     def get_ticket(self, ticket_id: int) -> dict:
         """Get a single ticket by ID from the help desk API.
 
@@ -273,6 +402,83 @@ class HelpDeskClient:
         if validate_response:
             return HelpTicket(**raw_dict)
         return raw_dict
+
+    def delete_ticket(self, ticket_id: int) -> dict:
+        """Delete / archive a request ticket by ID.
+
+        Args:
+            ticket_id: The ID of the ticket to delete.
+
+        Returns:
+            dict: API response, e.g. {"userMessage": "...", "id": ticket_id}
+        """
+        url = f"/api/v1/request/{ticket_id}"
+        return self._dispatch("DELETE", url)
+
+    delete_request = delete_ticket
+
+    def get_tickets_by_requester(self, requester: str) -> SearchResponse:
+        """Get tickets by requester logon name or email address.
+
+        Args:
+            requester: The requester's email address or logon name.
+
+        Returns:
+            SearchResponse: Search response containing matching tickets.
+        """
+        url = f"/api/v1/request/search/byRequester?requester={requester}"
+        raw_dict = self._dispatch("GET", url)
+        return SearchResponse(**raw_dict)
+
+    def get_request_count(self, column: str = "status", module: str = "request") -> dict:
+        """Get ticket aggregation count by column (status, priority, department, etc.).
+
+        Args:
+            column: Column name to aggregate by (e.g. 'status', 'priority', 'department', 'category', 'urgency', 'impact').
+            module: Module name (default 'request').
+
+        Returns:
+            dict: Aggregation result dictionary.
+        """
+        url = "/api/analytics/v1/aggregation/bymodule"
+        payload = {"module": module, "column": column}
+        return self._dispatch("GET", url, json=payload)
+
+    def upload_attachment(
+        self,
+        file_path: Optional[Union[str, os.PathLike]] = None,
+        file_content: Optional[bytes] = None,
+        file_name: Optional[str] = None,
+    ) -> dict:
+        """Upload a file attachment to ServiceOps to obtain a refFileName.
+
+        The returned refFileName can be passed in fileAttachments when creating
+        or updating tickets, or adding replies.
+
+        Args:
+            file_path: Path to the local file to upload.
+            file_content: Raw bytes of the file (alternative to file_path).
+            file_name: Name of the file (required if file_content is provided).
+
+        Returns:
+            dict: Upload response containing 'refFileName', 'realName', 'id', etc.
+        """
+        url = "/api/upload/file"
+        if file_path is not None:
+            path_obj = os.path.abspath(str(file_path))
+            fname = file_name or os.path.basename(path_obj)
+            with open(path_obj, "rb") as f:
+                files = {"file": (fname, f)}
+                return self._dispatch("POST", url, files=files)
+        elif file_content is not None:
+            if not file_name:
+                raise HelpDeskValidationError(
+                    "file_name is required when passing file_content bytes"
+                )
+            files = {"file": (file_name, file_content)}
+            return self._dispatch("POST", url, files=files)
+        else:
+            raise HelpDeskValidationError("Either file_path or file_content must be provided")
 
     def reply_to_ticket(
         self,

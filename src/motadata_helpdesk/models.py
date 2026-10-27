@@ -39,25 +39,30 @@ class HelpTicket(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
     id: int
-    name: str
-    created_time: int = Field(alias="createdTime")
-    updated_time: int = Field(alias="updatedTime")
+    name: Optional[str] = None
+    created_time: Optional[int] = Field(alias="createdTime", default=None)
+    updated_time: Optional[int] = Field(alias="updatedTime", default=None)
     technician_group_name: Optional[str] = Field(alias="technicianGroupName", default=None)
     assignee_email: Optional[str] = Field(alias="assigneeEmail", default=None)
-    status_name: str = Field(alias="statusName")
-    created_by_name: str = Field(alias="createdByName")
+    status_name: Optional[str] = Field(alias="statusName", default="Open")
+    created_by_name: Optional[str] = Field(alias="createdByName", default=None)
     subject: str
-    requester_name: str = Field(alias="requesterName")
+    requester_name: Optional[str] = Field(alias="requesterName", default=None)
     file_attachments: List[dict] = Field(alias="fileAttachments", default_factory=list)
-    requester_email: str = Field(alias="requesterEmail")
-    description: str
-    impact_name: str = Field(alias="impactName")
-    priority_name: str = Field(alias="priorityName")
-    urgency_name: str = Field(alias="urgencyName")
+    requester_email: Optional[str] = Field(alias="requesterEmail", default=None)
+    description: Optional[str] = ""
+    category_name: Optional[str] = Field(alias="categoryName", default=None)
+    department_name: Optional[str] = Field(alias="departmentName", default=None)
+    location_name: Optional[str] = Field(alias="locationName", default=None)
+    impact_name: Optional[str] = Field(alias="impactName", default=None)
+    priority_name: Optional[str] = Field(alias="priorityName", default=None)
+    urgency_name: Optional[str] = Field(alias="urgencyName", default=None)
     updated_by_name: Optional[str] = Field(alias="updatedByName", default=None)
-    source: str
+    tags: List[str] = Field(default_factory=list)
+    custom_field: dict = Field(alias="customField", default_factory=dict)
+    source: Optional[str] = "External"
     spam: bool = False
-    support_level: str = Field(alias="supportLevel")
+    support_level: Optional[str] = Field(alias="supportLevel", default=None)
 
 
 class SearchResponse(BaseModel):

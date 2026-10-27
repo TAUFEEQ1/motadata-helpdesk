@@ -35,29 +35,37 @@ pip install motadata-helpdesk
 
 ### 1. Initialize the Client
 
-#### Option A: OAuth 2.0 Credentials (Recommended for ServiceOps)
+You can authenticate using dedicated Auth classes (`OAuth2Auth` or `APIKeyAuth`) or by passing credentials directly to `HelpDeskClient`.
+
+#### Option A: OAuth 2.0 Authentication (Recommended for ServiceOps)
 
 ```python
-from motadata_helpdesk import HelpDeskClient
+from motadata_helpdesk import HelpDeskClient, OAuth2Auth
 
-client = HelpDeskClient(
-    base_url="https://serviceops.example.com",
+auth = OAuth2Auth(
     client_id="your-client-id",
     client_secret="your-client-secret",
     username="technician@company.com",
     password="your-password",
+)
+
+client = HelpDeskClient(
+    base_url="https://serviceops.example.com",
+    auth=auth,
     verify_ssl=False,  # Set to True for production with valid certificates
 )
 ```
 
-#### Option B: API Key
+#### Option B: API Key Authentication
 
 ```python
-from motadata_helpdesk import HelpDeskClient
+from motadata_helpdesk import HelpDeskClient, APIKeyAuth
+
+auth = APIKeyAuth(api_key="your-api-key")
 
 client = HelpDeskClient(
     base_url="https://serviceops.example.com",
-    api_key="your-api-key",
+    auth=auth,
 )
 ```
 
@@ -74,16 +82,51 @@ You can configure the client via environment variables:
 - `MOTADATA_VERIFY_SSL` (`true` or `false`)
 
 ```python
-import os
 from motadata_helpdesk import HelpDeskClient
 
-# Automatically reads from environment variables
+# Automatically resolves auth and URL from environment variables
 client = HelpDeskClient()
 ```
 
 ---
 
 ## Usage Examples
+
+### Creating a Ticket / Request
+
+```python
+# Create a new ticket (POST /api/v1/request)
+ticket = client.create_ticket(
+    subject="Printer not responding",
+    requester_email="alice@company.com",
+    category_name="Hardware",
+    priority_name="High",
+    urgency_name="Urgent",
+    impact_name="On Users",
+    department_name="Finance",
+    description="Network printer on 2nd floor is throwing paper jam error.",
+    tags=["Printer", "Hardware"],
+)
+
+print(f"Ticket created: {ticket.name} (ID: {ticket.id})")
+```
+
+### Uploading Attachments
+
+```python
+# Upload a file to receive a refFileName for tickets or conversations
+attachment = client.upload_attachment(file_path="logs.txt")
+ref_file_name = attachment["refFileName"]
+
+# Attach when creating or updating a ticket
+ticket = client.create_ticket(
+    subject="App Crash",
+    requester_email="bob@company.com",
+    file_attachments=[
+        {"refFileName": ref_file_name, "realName": "logs.txt"}
+    ],
+)
+```
 
 ### Searching Tickets with QueryBuilder
 

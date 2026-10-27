@@ -1,5 +1,6 @@
 """Motadata ServiceOps HelpDesk Python SDK."""
 
+from .auth import APIKeyAuth, BaseAuth, BearerTokenAuth, OAuth2Auth
 from .client import HelpDeskClient
 from .enums import ConversationState, ConversationType, StatusEnum
 from .exceptions import (
@@ -23,6 +24,10 @@ __version__ = "0.1.0"
 
 __all__ = [
     "HelpDeskClient",
+    "BaseAuth",
+    "APIKeyAuth",
+    "OAuth2Auth",
+    "BearerTokenAuth",
     "QueryBuilder",
     "StatusEnum",
     "ConversationType",
